@@ -1,0 +1,15 @@
+[submodule "Modules/mavlink"]
+	path = Modules/mavlink
+	url = git@github.com:Aeronavics/mavlink.git
+[submodule "Modules/DSDL"]
+	path = Modules/DSDL
+	url = git@github.com:Aeronavics/DSDL.git
+[submodule "Modules/STMBareCommon"]
+	path = Modules/STMBareCommon
+	url = git@github.com:Aeronavics/STMBareCommon.git
+[submodule "Modules/libcanard"]
+	path = Modules/libcanard
+	url = git@github.com:Aeronavics/libcanard.git
+[submodule "Modules/dronecan_dsdlc"]
+	path = Modules/dronecan_dsdlc
+	url = git@github.com:Aeronavics/dronecan_dsdlc.git
