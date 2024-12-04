@@ -1,5 +1,5 @@
 /*
- * loadcell_driver.hpp
+ * led_driver.hpp
  *
  *  Created on: Oct 25, 2024
  *      Author: jmorritt
@@ -20,9 +20,7 @@
 #include "adc.h"
 #include "dma.h"
 #include "tim.h"
-
 #include "main.h"
-
 #include "math.h"
 
 #include <com.aeronavics.BoomStatus.h>
@@ -86,7 +84,6 @@ enum OVERRIDE_PRIORITY{
 enum OVERRIDE_TYPE{
 	OVERRIDE_NONE,
 	OVERRIDE_CAN,
-	OVERRIDE_MAVLINK,
 };
 
 typedef struct{
@@ -99,28 +96,22 @@ typedef struct{
 }Override_t;
 
 enum LED_MODE {
-	LED_MODE_OFF, 		//switches applicable LED's off.
-	LED_MODE_RED_FADE,  //fades the Red LED implying the can boom id has not been set up
-    LED_MODE_FADE, 		//fades the LED's in to the low brightness
-	LED_MODE_STATUS,	//displays flight controller status colours
-    LED_MODE_NAV, 		//uses a safe brightness set in LED_LOW_BRIGHTNESS setting
-    LED_MODE_STROBE, 	//full brightness white strobe pulse
-	LED_MODE_OVERRIDE,	//Mavlink + CAN override
-};
-
-enum LANDLIGHT_STATE{
-	OFF,
-	ON,
+	LED_MODE_OFF, 		// Switches applicable LED's off.
+	LED_MODE_RED_FADE,  // Fades the Red LED implying the can boom id has not been set up
+    LED_MODE_FADE, 		// Fades the LED's in to the low brightness
+	LED_MODE_STATUS,	// Displays flight controller status colours
+    LED_MODE_NAV, 		// Uses a safe brightness set in LED_LOW_BRIGHTNESS setting
+    LED_MODE_STROBE, 	// Full brightness white strobe pulse
+	LED_MODE_OVERRIDE,	// CAN override
 };
 
 enum LED_CONTROL_MODE {
-    LED_CONTROL_MODE_AUTO, //lets the brightness be controlled via CAN Messages
-    LED_CONTROL_MODE_MANUAL //Manually sets the brightness.
+    LED_CONTROL_MODE_AUTO, 	// Lets the brightness be controlled via CAN Messages
+    LED_CONTROL_MODE_MANUAL // Manually sets the brightness.
 };
 
 typedef struct{
 	uint8_t array_index;		//current index in array for moving average
-	//uint16_t value;			//calculated value
 	uint32_t raw_values[TELEM_MOVING_AVERAGE_BINS];	//array of raw values used to calculate a moving average
 }telemBase_t;
 
@@ -160,39 +151,15 @@ class Led_driver : public Driver_module
 
 		uint8_t can_led_mode;
 
-		uint32_t last_can_recieved_time;
+		uint8_t flash_pattern_index;
+
+		uint32_t loopTimer;
+
+		uint32_t last_can_received_time;
 		bool isSystemRunning;
 		bool isSystemArmed;
 
 		Colour_t led;
-
-		uint8_t fadeVals[24] =
-		{
-			64,
-			128,
-			192,
-			255,
-			255,
-			255,
-			255,
-			255,
-			255,
-			255,
-			255,
-			255,
-			192,
-			128,
-			64,
-			0,
-			0,
-			0,
-			0,
-			0,
-			0,
-			0,
-			0,
-			0,
-		};
 
 		Led_driver(void);
 		Led_driver(Led_driver const&);		// Poisoned.
@@ -203,10 +170,8 @@ class Led_driver : public Driver_module
 		void setLED(uint16_t red, uint16_t green, uint16_t blue, uint16_t white);
 
 		void transmit_telemetry(void);
-		void calculate_led_pwm(void);
 		void calculate_temperature(void);
 
-		float map_loadcell_weight(float weight);
 		float calculate_average(volatile uint32_t* array, uint8_t size);
 
 		uint32_t map_LED(uint32_t x, uint32_t in_min, uint32_t in_max, uint32_t out_min, uint32_t out_max);

@@ -1,5 +1,5 @@
 /*
- * loadcell_driver.cpp
+ * led_driver.cpp
  *
  *  Created on: Oct 25, 2024
  *      Author: jmorritt
@@ -8,8 +8,8 @@
 #include "led_driver.hpp"
 
 /**
- * @brief  Creates and returns a singleton instance of the Loadcell driver
- * @retval Singleton instance of the Loadcell driver
+ * @brief  Creates and returns a singleton instance of the Led driver
+ * @retval Singleton instance of the Led driver
  */
 Led_driver& Led_driver::get_driver(void)
 {
@@ -21,7 +21,7 @@ Led_driver& Led_driver::get_driver(void)
 }
 
 /**
- * @brief  Loadcell driver deconstructor
+ * @brief  Led driver deconstructor
  * @retval None
  */
 Led_driver::~Led_driver(void)
@@ -30,7 +30,7 @@ Led_driver::~Led_driver(void)
 }
 
 /**
- * @brief  Handles loadcell drivers unthrottled loop
+ * @brief  Handles Led drivers unthrottled loop
  * @retval None
  */
 void Led_driver::sync_update_unthrottled(void)
@@ -44,7 +44,7 @@ void Led_driver::sync_update_unthrottled(void)
 }
 
 /**
- * @brief  Handles loadcell drivers 100Hz loop
+ * @brief  Handles Led drivers 100Hz loop
  * @retval None
  */
 void Led_driver::sync_update_100Hz(void)
@@ -63,8 +63,8 @@ void Led_driver::sync_update_100Hz(void)
 }
 
 /**
- * @brief  Handles loadcell drivers 10Hz loop
- * @note   Transmits loadcell status telemetry in this loop.
+ * @brief  Handles Led drivers 10Hz loop
+ * @note   Transmits Led status telemetry in this loop.
  * @retval None
  */
 void Led_driver::sync_update_10Hz(void)
@@ -74,6 +74,15 @@ void Led_driver::sync_update_10Hz(void)
 	{
 		return;
 	}
+	
+	//reset override if timed out
+    if(HAL_GetTick()-led_override.last_override_time > OVERRIDE_TIMEOUT)
+	{
+      led_override.is_active = false;
+      led_override.source_id = 0;  
+      led_override.priority = PRIORITY_NONE;
+      led_override.type = OVERRIDE_NONE;           
+    } 
 
 	// Calculate temperature moving averages
 	calculate_temperature();
@@ -84,7 +93,7 @@ void Led_driver::sync_update_10Hz(void)
 }
 
 /**
- * @brief  Handles loadcell drivers 1Hz loop
+ * @brief  Handles Led drivers 1Hz loop
  * @note   1Hz loop handles all housekeeping.
  * @retval None
  */
@@ -108,29 +117,33 @@ void Led_driver::sync_update_1Hz(void)
 		{
 			MX_DMA_Init();
 			MX_ADC1_Init();
-			/* Intialise ADCs*/
+			// Intialise ADCs
 			if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED) != HAL_OK)
 			{
-				/* Calibration Error */
+				// Calibration Error
 				Error_Handler();
 			}
 
 			if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&temperature_adc_reading, 1) != HAL_OK)
 			{
-				/* Start Error */
+				// Start Error
 				Error_Handler();
 			}
 
+			// Intialise timer
 			MX_TIM2_Init();
+			// Set pwm to 0
 			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, led.red);
 			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, led.green);
 			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, led.blue);
 			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, led.white);
+			// Start pwm on each channel 
+			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1); // RED 
+			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2); // GREEN
+			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3); // BLUE
+			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4); // WHITE
 
-			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-			HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+			loopTimer = HAL_GetTick();
 
 			Libcanard_module::get_driver().sendLog(impl_::LogLevel::Debug, "LED Driver initialized");
 			next_state = DRIVER_STATE_NORMAL;
@@ -164,26 +177,25 @@ void Led_driver::sync_update_1Hz(void)
 	return;
 }
 
+/**
+ * @brief  Calculates the LED colour.
+ * @note   Decides what mode the LEDs should should be in at the time
+ * 			and based on that what colours the LEDs should be.
+ * @retval None
+ */
 void Led_driver::set_led_output(){
-	static uint8_t flash_pattern_index = 0;
-
-	static uint32_t loopTimer = HAL_GetTick();
-
 	uint16_t nav_brightness = get_can_param_by_id(CAN_PARAM_IDX_LEDNAV_BR)->value.integer_value;
 
 	uint8_t boom_id = get_can_param_by_id(CAN_PARAM_IDX_BOOM_ID)->value.integer_value;
-
-	mode = LED_MODE_FADE; //set to something arbitrary
-
 
 	if(isSystemRunning){
 
 		if (boom_id == 0)
 		{
-			mode = LED_MODE_RED_FADE;
+			mode = LED_MODE_RED_FADE; // Boom can params are not set up
 		}
 		//overrides to normal operation
-		else if(HAL_GetTick()-last_can_recieved_time > 100)
+		else if(HAL_GetTick()-last_can_received_time > 100)
 		{
 			mode = LED_MODE_STROBE; //oh dear, we've lost the flight controller
 		}
@@ -220,80 +232,109 @@ void Led_driver::set_led_output(){
 		}
 	}
 	else{
-		mode = LED_MODE_FADE;
+		mode = LED_MODE_FADE; // have not received can data for the first time yet
 	}
 
 	switch(mode)
 	{
 		case LED_MODE_OFF:
 		{
-			setLED(0,0,0,0);
+			setLED(0, 0, 0, 0);
 			break;
 		}
 		case LED_MODE_RED_FADE:
 		{
-			uint16_t fade_output;
-			fade_output = (FADE_MAX_BRIGHTNESS/2)*sin(HAL_GetTick()*(M_2PI/FADE_PERIOD)-M_PI)+(FADE_MAX_BRIGHTNESS/2);
-			setLED(fade_output,0,0,0);
+			uint16_t fade_output = (FADE_MAX_BRIGHTNESS / 2) * sin(HAL_GetTick() * (M_2PI / FADE_PERIOD) - M_PI) + (FADE_MAX_BRIGHTNESS / 2);
+			setLED(fade_output, 0, 0, 0);
 			break;
 		}
 		case LED_MODE_FADE:
 		{
-			uint16_t fade_output;
-			fade_output = (FADE_MAX_BRIGHTNESS/2)*sin(HAL_GetTick()*(M_2PI/FADE_PERIOD)-M_PI)+(FADE_MAX_BRIGHTNESS/2);
-			setLED(fade_output,fade_output,fade_output,0);
+			uint16_t fade_output = (FADE_MAX_BRIGHTNESS / 2) * sin(HAL_GetTick() * (M_2PI / FADE_PERIOD) - M_PI) + (FADE_MAX_BRIGHTNESS / 2);
+			setLED(fade_output, fade_output, fade_output, 0);
 			break;
 		}
 		case LED_MODE_OVERRIDE:
 		{
-			setLED(map_LED(led_override.colour.red,0,1000,0,nav_brightness),map_LED(led_override.colour.green,0,1000,0,nav_brightness),map_LED(led_override.colour.blue,0,1000,0,nav_brightness),0);
+			uint16_t red = map_LED(led_override.colour.red, 0, 1000, 0, nav_brightness);
+			uint16_t green = map_LED(led_override.colour.green, 0, 1000, 0, nav_brightness);
+			uint16_t blue = map_LED(led_override.colour.blue, 0, 1000, 0, nav_brightness);
+
+			setLED(red, green, blue, 0);
 			break;
 		}
 		case LED_MODE_STATUS:
 		{
 			//set all LEDs to flight controller status colour
-			setLED(status_colour.red/2,status_colour.green/2,status_colour.blue/2,0);
+			setLED(status_colour.red / 2, status_colour.green / 2, status_colour.blue / 2, 0);
 			break;
 		}
 		case LED_MODE_STROBE:
 		{
-			if(((FLASH_PATTERN_STROBE >> flash_pattern_index)&0x01)/*&& !lastStrobeTrigger*/){
-				setLED(0, 0, 0, LED_PWM_MAX_PERIOD_RELOAD);
+			if((FLASH_PATTERN_STROBE >> flash_pattern_index) & 0x01){
+				setLED(LED_PWM_MAX_PERIOD_RELOAD, LED_PWM_MAX_PERIOD_RELOAD, LED_PWM_MAX_PERIOD_RELOAD, LED_PWM_MAX_PERIOD_RELOAD);
 			}
 			else
 			{
-				if (boom_id == 1 || boom_id == 4)
+				if (boom_id == 1)
 				{
 					setLED(0, nav_brightness, 0, 0);
 				}
-				else {
+				else if (boom_id == 3)
+				{
 					setLED(nav_brightness, 0, 0, 0);
+				}
+				else if (boom_id == 2 || boom_id == 4) 
+				{
+					setLED(0, 0, 0, nav_brightness);
 				}
 			}
 			break;
 		}
 		case LED_MODE_NAV:
 		{
-			if (boom_id == 1 || boom_id == 4)
+			if (boom_id == 1)
 			{
-				if((FLASH_PATTERN_PORT >> flash_pattern_index)&0x01)
+				if((FLASH_PATTERN_PORT >> flash_pattern_index) & 0x01)
 				{
-					setLED(0,nav_brightness,0,0);
+					setLED(0, nav_brightness, 0, 0);
 				}
 				else
 				{
-					setLED(0,0,0,0);
+					setLED(0, 0, 0, 0);
 				}
 			}
-			else
+			else if (boom_id == 3)
 			{
-				if((FLASH_PATTERN_STARBOARD>> flash_pattern_index)&0x01)
+				if((FLASH_PATTERN_STARBOARD >> flash_pattern_index) & 0x01)
 				{
-					setLED(nav_brightness,0,0,0);
+					setLED(nav_brightness, 0, 0, 0);
 				}
 				else
 				{
-					setLED(0,0,0,0);
+					setLED(0, 0, 0, 0);
+				}
+			}
+			else if (boom_id == 2)
+			{
+				if((FLASH_PATTERN_STARBOARD >> flash_pattern_index) & 0x01)
+				{
+					setLED(0, 0, 0, nav_brightness);
+				}
+				else
+				{
+					setLED(0, 0, 0, 0);
+				}
+			}
+			else if (boom_id == 4)
+			{
+				if((FLASH_PATTERN_PORT >> flash_pattern_index) & 0x01)
+				{
+					setLED(0, 0, 0, nav_brightness);
+				}
+				else
+				{
+					setLED(0, 0, 0, 0);
 				}
 			}
 			break;
@@ -311,7 +352,10 @@ void Led_driver::set_led_output(){
 	}
 }
 
-
+/**
+ * @brief  Updates the pwm for each of the colour channels.
+ * @retval None
+ */
 void Led_driver::update_LEDs()
 {
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, led.red);
@@ -322,16 +366,16 @@ void Led_driver::update_LEDs()
 
 
 /**
- * @brief  Handles incoming CAN messages
- * @param  transfer : The CAN message
- * @param  data_type_signature : CAN signature of the transfer
+ * @brief  	Handles incoming CAN messages
+ * @param  	transfer : The CAN message
+ * @param  	data_type_signature : CAN signature of the transfer
  * @param	data_type_id : CAN ID of the transfer
  * @param	inout_transfer_id : transfer id of the transfer
  * @param	priority : Priority of the transfer
- * @param  payload : CAN payload of the transfer
+ * @param  	payload : CAN payload of the transfer
  * @param	payload_len : Length of the CAN payload
- * @note   Listens to the incoming can messages and processes them if required.
- * @retval None
+ * @note   	Listens to the incoming can messages and processes them if required.
+ * @retval 	None
  */
 void Led_driver::handle_rx_can(const CanardRxTransfer * transfer, uint64_t data_type_signature, uint16_t data_type_id, uint8_t* inout_transfer_id, uint8_t priority, const void* payload, uint16_t payload_len)
 {
@@ -431,7 +475,7 @@ void Led_driver::handle_rx_can(const CanardRxTransfer * transfer, uint64_t data_
 	}
 	case ARDUPILOT_INDICATION_NOTIFYSTATE_ID:
 	{
-		last_can_recieved_time = HAL_GetTick();
+		last_can_received_time = HAL_GetTick();
 	}
 	default:
 	{
@@ -441,9 +485,8 @@ void Led_driver::handle_rx_can(const CanardRxTransfer * transfer, uint64_t data_
 }
 
 /**
- * @brief  Transmits Loadcell driver telemetry
- * @note   Tramsmits a com_aronavics_LoadcellInfo msg over CAN
- * 				after checking for errors and calculating values
+ * @brief  Transmits Led driver telemetry
+ * @note   Transmits a com_aeronavics_BoomStatus msg over CAN.
  * @retval None
  */
 void Led_driver::transmit_telemetry(void)
@@ -475,9 +518,7 @@ void Led_driver::transmit_telemetry(void)
 }
 
 /**
- * @brief  Calculates the weight measured by the loadcell
- * @note   Calculates the moving average of the loadcell sensor.
- *					measured_weight is then updated to the calculated value.
+ * @brief  Calculates the temperature measured on the LED Board.
  * @retval None
  */
 void Led_driver::calculate_temperature(void)
@@ -496,7 +537,7 @@ void Led_driver::calculate_temperature(void)
  * @brief  Calculates the average of a given array
  * @param  array : Array to calculate average over
  * @param  size	: Size of the array
- * @retval uint16_t average of the array
+ * @retval float average of the array
  */
 float Led_driver::calculate_average(volatile uint32_t* array, uint8_t size)
 {
@@ -507,7 +548,14 @@ float Led_driver::calculate_average(volatile uint32_t* array, uint8_t size)
 	return temp_value / size;
 }
 
-
+/**
+ * @brief  Maps and sets the colours for the LEDs.
+ * @param  red : 0-1000 of intensity of red.
+ * @param  green : 0-1000 of intensity of green.
+ * @param  blue : 0-1000 of intensity of blue.
+ * @param  white : 0-1000 of intensity of white.
+ * @retval None.
+ */
 void Led_driver::setLED(uint16_t red, uint16_t green, uint16_t blue, uint16_t white){
 	if(red > 1000)red = 1000;
 	if(green > 1000)green = 1000;
@@ -520,6 +568,15 @@ void Led_driver::setLED(uint16_t red, uint16_t green, uint16_t blue, uint16_t wh
 	led.white = map_LED(white,0,LED_PSEUDO_SCALE_MAX,0,LED_PWM_MAX_PERIOD_RELOAD);
 }
 
+/**
+ * @brief  Maps a given value from one rage to another.
+ * @param  x : value to map.
+ * @param  in_min : Minimum value of x.
+ * @param  in_max : Maximum value of x.
+ * @param  out_min : Minimum value of x after mapping.
+ * @param  out_max : Maximum value of x after mapping.
+ * @retval uint32_t mapped value.
+ */
 uint32_t Led_driver::map_LED(uint32_t x, uint32_t in_min, uint32_t in_max, uint32_t out_min, uint32_t out_max)
 {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
@@ -538,6 +595,10 @@ void Led_driver::adc_callback(ADC_HandleTypeDef *AdcHandle)
 	temperature_sensor.array_index = ++temperature_sensor.array_index % TELEM_MOVING_AVERAGE_BINS;
 }
 
+/**
+ * @brief  Led driver constructor
+ * @retval None
+ */
 Led_driver::Led_driver(void)
 {
 	// Initialise the driver state machine.
